@@ -690,27 +690,11 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-@protocol WYPopoverOverlayViewDelegate;
-
 @interface WYPopoverOverlayView : UIView {
   BOOL _testHits;
 }
 
-@property(nonatomic, assign) id <WYPopoverOverlayViewDelegate> delegate;
 @property(nonatomic, unsafe_unretained) NSArray *passthroughViews;
-
-@end
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#pragma mark - WYPopoverOverlayViewDelegate
-
-@protocol WYPopoverOverlayViewDelegate <NSObject>
-
-@optional
-- (BOOL)dismissOnPassthroughViewTap;
-- (void)popoverOverlayViewDidTouch:(WYPopoverOverlayView *)overlayView;
 
 @end
 
@@ -733,13 +717,6 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
     _testHits = NO;
 
     if ([self isPassthroughView:superHitView]) {
-      if ([self.delegate dismissOnPassthroughViewTap]) {
-        dispatch_async(dispatch_get_main_queue(), ^ {
-                         if ([self.delegate respondsToSelector:@selector(popoverOverlayViewDidTouch:)]) {
-                           [self.delegate popoverOverlayViewDidTouch:self];
-                         }
-                       });
-      }
       return superHitView;
     }
   }
@@ -1418,7 +1395,7 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
 
 ////////////////////////////////////////////////////////////////////////////
 
-@interface WYPopoverController () <WYPopoverOverlayViewDelegate, WYPopoverBackgroundViewDelegate> {
+@interface WYPopoverController () <WYPopoverBackgroundViewDelegate> {
   UIViewController        *_viewController;
   CGRect                   _rect;
   UIView                  *_inView;
@@ -1787,7 +1764,6 @@ static WYPopoverTheme *defaultTheme_ = nil;
     _overlayView = [[WYPopoverOverlayView alloc] initWithFrame:_inView.window.bounds];
     _overlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _overlayView.autoresizesSubviews = NO;
-    _overlayView.delegate = self;
     _overlayView.passthroughViews = _passthroughViews;
 
     _backgroundView = [[WYPopoverBackgroundView alloc] initWithContentSize:contentViewSize];
@@ -1804,6 +1780,14 @@ static WYPopoverTheme *defaultTheme_ = nil;
       tap = [[UITapGestureRecognizer alloc] initWithTarget:_backgroundView action:@selector(tapOut)];
       tap.cancelsTouchesInView = NO;
       [_backgroundView addGestureRecognizer:tap];
+    }
+    
+    if (self.dismissOnPassthroughViewTap) {
+      for (UIView *view in self.passthroughViews) {
+        UITapGestureRecognizer *passthroughViewTap = [[UITapGestureRecognizer alloc] initWithTarget:_backgroundView action:@selector(tapOut)];
+        tap.cancelsTouchesInView = NO;
+        [view addGestureRecognizer:passthroughViewTap];
+      }
     }
 
     [_inView.window addSubview:_backgroundView];
@@ -2509,24 +2493,18 @@ static WYPopoverTheme *defaultTheme_ = nil;
   }
 }
 
-#pragma mark WYPopoverOverlayViewDelegate
-
-- (void)popoverOverlayViewDidTouch:(WYPopoverOverlayView *)aOverlayView {
-  BOOL shouldDismiss = !_viewController.modalInPopover;
-
-  if (shouldDismiss && _delegate && [_delegate respondsToSelector:@selector(popoverControllerShouldDismissPopover:)]) {
-    shouldDismiss = [_delegate popoverControllerShouldDismissPopover:self];
-  }
-
-  if (shouldDismiss) {
-    [self dismissPopoverAnimated:_animated options:options completion:nil callDelegate:YES];
-  }
-}
-
 #pragma mark WYPopoverBackgroundViewDelegate
 
 - (void)popoverBackgroundViewDidTouchOutside:(WYPopoverBackgroundView *)aBackgroundView {
-  [self popoverOverlayViewDidTouch:nil];
+  BOOL shouldDismiss = !_viewController.modalInPopover;
+  
+  if (shouldDismiss && _delegate && [_delegate respondsToSelector:@selector(popoverControllerShouldDismissPopover:)]) {
+    shouldDismiss = [_delegate popoverControllerShouldDismissPopover:self];
+  }
+  
+  if (shouldDismiss) {
+    [self dismissPopoverAnimated:_animated options:options completion:nil callDelegate:YES];
+  }
 }
 
 #pragma mark Private
@@ -2916,7 +2894,6 @@ static CGPoint WYPointRelativeToOrientation(CGPoint origin, CGSize size, UIInter
   [_backgroundView setDelegate:nil];
 
   [_overlayView removeFromSuperview];
-  [_overlayView setDelegate:nil];
   @try {
     if (_isObserverAdded == YES) {
       _isObserverAdded = NO;
