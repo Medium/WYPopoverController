@@ -32,7 +32,7 @@
 #endif
 
 #ifdef DEBUG
-#define WY_LOG(fmt, ...)		NSLog((@"%s (%d) : " fmt), __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__)
+#define WY_LOG(fmt, ...)    NSLog((@"%s (%d) : " fmt), __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__)
 #else
 #define WY_LOG(...)
 #endif
@@ -749,23 +749,10 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#pragma mark - WYPopoverBackgroundViewDelegate
-
-@protocol WYPopoverBackgroundViewDelegate <NSObject>
-
-@optional
-- (void)popoverBackgroundViewDidTouchOutside:(WYPopoverBackgroundView *)backgroundView;
-
-@end
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 @interface WYPopoverBackgroundView () {
   WYPopoverBackgroundInnerView *_innerView;
   CGSize _contentSize;
 }
-
-@property(nonatomic, assign) id <WYPopoverBackgroundViewDelegate> delegate;
 
 @property (nonatomic, assign) WYPopoverArrowDirection arrowDirection;
 
@@ -776,8 +763,6 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
 @property (nonatomic, assign) BOOL wantsDefaultContentAppearance;
 
 @property (nonatomic, assign, getter = isAppearing) BOOL appearing;
-
-- (void)tapOut;
 
 - (void)setViewController:(UIViewController *)viewController;
 
@@ -823,10 +808,6 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
   }
 
   return self;
-}
-
-- (void)tapOut {
-  [self.delegate popoverBackgroundViewDidTouchOutside:self];
 }
 
 - (UIEdgeInsets)outerShadowInsets {
@@ -1395,7 +1376,7 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
 
 ////////////////////////////////////////////////////////////////////////////
 
-@interface WYPopoverController () <WYPopoverBackgroundViewDelegate> {
+@interface WYPopoverController () {
   UIViewController        *_viewController;
   CGRect                   _rect;
   UIView                  *_inView;
@@ -1413,6 +1394,8 @@ static float edgeSizeFromCornerRadius(float cornerRadius) {
 
   BOOL themeUpdatesEnabled;
   BOOL themeIsUpdating;
+
+  NSMutableDictionary *_passthroughViewToTapRecognizer;
 }
 
 - (void)dismissPopoverAnimated:(BOOL)aAnimated
@@ -1537,6 +1520,8 @@ static WYPopoverTheme *defaultTheme_ = nil;
     themeUpdatesEnabled = YES;
 
     popoverContentSize_ = CGSizeZero;
+
+    _passthroughViewToTapRecognizer = [NSMutableDictionary dictionary];
   }
 
   return self;
@@ -1768,25 +1753,24 @@ static WYPopoverTheme *defaultTheme_ = nil;
 
     _backgroundView = [[WYPopoverBackgroundView alloc] initWithContentSize:contentViewSize];
     _backgroundView.appearing = YES;
-
-    _backgroundView.delegate = self;
     _backgroundView.hidden = YES;
 
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:_backgroundView action:@selector(tapOut)];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleBackgroundTap:)];
     tap.cancelsTouchesInView = NO;
     [_overlayView addGestureRecognizer:tap];
 
     if (self.dismissOnTap) {
-      tap = [[UITapGestureRecognizer alloc] initWithTarget:_backgroundView action:@selector(tapOut)];
+      UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleBackgroundTap:)];
       tap.cancelsTouchesInView = NO;
       [_backgroundView addGestureRecognizer:tap];
     }
     
     if (self.dismissOnPassthroughViewTap) {
       for (UIView *view in self.passthroughViews) {
-        UITapGestureRecognizer *passthroughViewTap = [[UITapGestureRecognizer alloc] initWithTarget:_backgroundView action:@selector(tapOut)];
-        tap.cancelsTouchesInView = NO;
+        UITapGestureRecognizer *passthroughViewTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleBackgroundTap:)];
+        passthroughViewTap.cancelsTouchesInView = NO;
         [view addGestureRecognizer:passthroughViewTap];
+        _passthroughViewToTapRecognizer[[NSValue valueWithNonretainedObject:view]] = passthroughViewTap;
       }
     }
 
@@ -2495,17 +2479,18 @@ static WYPopoverTheme *defaultTheme_ = nil;
 
 #pragma mark WYPopoverBackgroundViewDelegate
 
-- (void)popoverBackgroundViewDidTouchOutside:(WYPopoverBackgroundView *)aBackgroundView {
+- (void)handleBackgroundTap:(id)sender {
   BOOL shouldDismiss = !_viewController.modalInPopover;
-  
+
   if (shouldDismiss && _delegate && [_delegate respondsToSelector:@selector(popoverControllerShouldDismissPopover:)]) {
     shouldDismiss = [_delegate popoverControllerShouldDismissPopover:self];
   }
-  
+
   if (shouldDismiss) {
     [self dismissPopoverAnimated:_animated options:options completion:nil callDelegate:YES];
   }
 }
+
 
 #pragma mark Private
 - (WYPopoverArrowDirection)arrowDirectionForRect:(CGRect)aRect
@@ -2890,9 +2875,17 @@ static CGPoint WYPointRelativeToOrientation(CGPoint origin, CGSize size, UIInter
 - (void)dealloc {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
 
-  [_backgroundView removeFromSuperview];
-  [_backgroundView setDelegate:nil];
+  // Since self.passthroughViews outlive the popover,
+  // unregister their tap gesture recognizers.
+  for (UIView *view in self.passthroughViews) {
+    UIGestureRecognizer *tapRecognizer = _passthroughViewToTapRecognizer[[NSValue valueWithNonretainedObject:view]];
+    if (tapRecognizer) {
+      [view removeGestureRecognizer:tapRecognizer];
+      [_passthroughViewToTapRecognizer removeObjectForKey:[NSValue valueWithNonretainedObject:view]];
+    }
+  }
 
+  [_backgroundView removeFromSuperview];
   [_overlayView removeFromSuperview];
   @try {
     if (_isObserverAdded == YES) {
